@@ -1,0 +1,9 @@
+# Build files #
+**.o
+/slkwvr
+/build
+
+# Miscellaneous #
+**.swp
+/notes
+/old
