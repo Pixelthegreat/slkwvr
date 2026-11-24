@@ -2103,6 +2103,7 @@ struct compiler {
 		.fp = (p_fp),\
 		.iota = 1,\
 		.level = 0,\
+		.no_block_push_scope = true,\
 	}
 
 static struct result compiler_visit(
@@ -2411,7 +2412,7 @@ static struct result compiler_visit_procedure(
 		if (i) fputs(", ", compiler->fp);
 		fprintf(
 			compiler->fp,
-			"%c %%%s.1.data",
+			"%c %%%s.0.data",
 			get_qbe_type(param_results[i].type),
 			name_token->value
 		);
@@ -2428,8 +2429,8 @@ static struct result compiler_visit_procedure(
 
 		fprintf(
 			compiler->fp,
-			"%%%s.1 =l alloc8 %zu\n"
-			"%s %%%s.1.data, %%%s.1\n",
+			"%%%s.0 =l alloc8 %zu\n"
+			"%s %%%s.0.data, %%%s.0\n",
 			name_token->value, size,
 			get_qbe_type_store(param_results[i].type),
 			name_token->value,

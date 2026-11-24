@@ -13,7 +13,7 @@ CFLAGS += -fsanitize=address -g3
 LDFLAGS += -fsanitize=address -g3
 endif
 
-TESTS += condition float loop slkwvr
+TESTS += condition float global loop slkwvr
 .PHONY: all test $(TESTS:%=test_%) example
 
 all: slkwvr
