@@ -3409,31 +3409,12 @@ static struct result compiler_visit_unop(
 			);
 			return RESULT_FAIL;
 		}
-		uint16_t b1_iota = compiler->iota++;
-		uint16_t b2_iota = compiler->iota++;
-		uint16_t b3_iota = compiler->iota++;
-
-		result.type = TYPE_U8;
 		result.iota = compiler->iota++;
 
 		safe_fprintf(
 			compiler->fp,
-			"@branch.%d\n"
-			"jnz %%.t%d, @branch.%d, @branch.%d\n"
-			"@branch.%d\n"
-			"jmp @result.%d\n"
-			"@branch.%d\n"
-			"jmp @result.%d\n"
-			"@result.%d\n"
-			"%%.t%d =l phi @branch.%d 0, @branch.%d 1\n",
-			(int)b1_iota,
-			(int)value_result.iota, (int)b2_iota, (int)b3_iota,
-			(int)b2_iota,
-			(int)result.iota,
-			(int)b3_iota,
-			(int)result.iota,
-			(int)result.iota,
-			(int)result.iota, (int)b2_iota, (int)b3_iota
+			"%%.t%d =l ceql %%.t%d, 0\n",
+			(int)result.iota, (int)value_result.iota
 		);
 	}
 
