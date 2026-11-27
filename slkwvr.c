@@ -3532,6 +3532,7 @@ static struct result compiler_visit_string(
 	struct result result = {
 		.type = TYPE_PTR,
 		.flags = 0,
+		.data = (uintptr_t)i,
 	};
 	if (!local_map_count)
 		return result;
