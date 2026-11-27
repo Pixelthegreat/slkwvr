@@ -2437,7 +2437,7 @@ static struct result compiler_visit_procedure(
 		local->values[2] = local_map_count-1; /* scope */
 
 		/* argument */
-		if (i) fputs(", ", compiler->fp);
+		if (i) safe_fputs(", ", compiler->fp);
 		safe_fprintf(
 			compiler->fp,
 			"%c %%%s.0.data",
@@ -2445,7 +2445,7 @@ static struct result compiler_visit_procedure(
 			name_token->value
 		);
 	}
-	fputs(") {\n@start\n", compiler->fp);
+	safe_fputs(") {\n@start\n", compiler->fp);
 
 	/* allocate stack space for parameters */
 	param_node = node->first;
@@ -2526,7 +2526,7 @@ static struct result compiler_visit_procedure(
 		return RESULT_FAIL;
 
 	map_destroy(&compiler->locals);
-	fputs("@return\nret 0\n}\n", compiler->fp);
+	safe_fputs("@return\nret 0\n}\n", compiler->fp);
 
 	pop_scope();
 	return RESULT(TYPE_I8, 0);
@@ -2617,7 +2617,7 @@ static struct result compiler_visit_variable(
 				"z %zu", size
 			);
 		}
-		fputs(" }\n", compiler->fp);
+		safe_fputs(" }\n", compiler->fp);
 	}
 
 	/* local variable */
@@ -3537,7 +3537,7 @@ static struct result compiler_visit_call(
 	arg_node = node->next;
 	for (size_t i = 0; i < arg_count; i++, arg_node = arg_node->next) {
 
-		if (i) fputs(", ", compiler->fp);
+		if (i) safe_fputs(", ", compiler->fp);
 		safe_fprintf(
 			compiler->fp,
 			"%c %%.t%d",
