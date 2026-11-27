@@ -4,6 +4,9 @@ $main :: proc() i32 {
 
 	for (var %i = u64 0; %i < 10; %i = (%i + 1)) {
 
+		var %x = i32 0i32
+		var %y = i32 {}
+
 		if (%i == 3) continue
 		else if (%i == 9) break
 

@@ -8,6 +8,19 @@
 
 static const char *progname = "slkwvr";
 
+/* print to file if file is present (sort of a hack) */
+static int safe_fprintf(FILE *fp, const char *fmt, ...) {
+
+	if (!fp) return 0;
+
+	va_list args;
+	va_start(args, fmt);
+	int count = vfprintf(fp, fmt, args);
+	va_end(args);
+
+	return count;
+}
+
 /* position information */
 struct position {
 	FILE *fp;
@@ -265,6 +278,8 @@ static struct map *map_new_hash(struct map *map, uint32_t key_hash) {
 
 static void map_destroy(struct map *map) {
 
+	struct map *orig = map;
+
 	map = map->next;
 	while (map) {
 
@@ -272,6 +287,7 @@ static void map_destroy(struct map *map) {
 		free(map);
 		map = next;
 	}
+	orig->next = NULL;
 }
 
 /* common hash maps */
@@ -2098,6 +2114,7 @@ struct compiler {
 	uint16_t loop_start_iota;
 	uint16_t loop_end_iota;
 	bool no_block_push_scope;
+	struct map locals;
 };
 #define COMPILER_INIT(p_fp) {\
 		.fp = (p_fp),\
@@ -2126,6 +2143,7 @@ static struct result compiler_visit_block(
 			return RESULT_FAIL;
 	}
 	bool no_block_push_scope = compiler->no_block_push_scope;
+	compiler->no_block_push_scope = false;
 	compiler->level++;
 
 	node = node->first;
@@ -2145,7 +2163,7 @@ static struct result compiler_visit_block(
 	if (!result.iota && compiler->level > 1) {
 
 		result.iota = compiler->iota++;
-		fprintf(
+		safe_fprintf(
 			compiler->fp,
 			"%%.t%d =l copy 0\n",
 			(int)result.iota
@@ -2360,7 +2378,7 @@ static struct result compiler_visit_procedure(
 
 	compiler->return_type = return_type_result.type;
 
-	fprintf(
+	safe_fprintf(
 		compiler->fp,
 		"export function %c $%s(",
 		get_qbe_type(return_type_result.type),
@@ -2410,7 +2428,7 @@ static struct result compiler_visit_procedure(
 
 		/* argument */
 		if (i) fputs(", ", compiler->fp);
-		fprintf(
+		safe_fprintf(
 			compiler->fp,
 			"%c %%%s.0.data",
 			get_qbe_type(param_results[i].type),
@@ -2427,7 +2445,7 @@ static struct result compiler_visit_procedure(
 		size_t size = result_get_type_size(param_results+i);
 		name_token = param_node->tokens[0];
 
-		fprintf(
+		safe_fprintf(
 			compiler->fp,
 			"%%%s.0 =l alloc8 %zu\n"
 			"%s %%%s.0.data, %%%s.0\n",
@@ -2437,12 +2455,67 @@ static struct result compiler_visit_procedure(
 			name_token->value
 		);
 	}
+
+	/* dry run for local variable info */
+	FILE *fp = compiler->fp;
+	compiler->fp = NULL;
+
 	compiler->no_block_push_scope = true;
 
 	struct node *body_node = return_type_node->next;
 	if (!RESULT_OKAY(compiler_visit(compiler, body_node)))
 		return RESULT_FAIL;
 
+	compiler->fp = fp;
+
+	/* allocate stack space for locals */
+	struct map *local = compiler->locals.next;
+	for (; local; local = local->next) {
+
+		const char *name = (const char *)local->values[0];
+
+		if (local->values[1])
+			safe_fprintf(
+				compiler->fp,
+				"%%%s.%jd.data =l alloc8 %jd\n"
+				"%%%s.%jd =l alloc8 8\n"
+				"storel %%%s.%jd.data, %%%s.%jd\n",
+				name, local->values[2], local->values[3],
+				name, local->values[2],
+				name, local->values[2], name, local->values[2]
+			);
+		else
+			safe_fprintf(
+				compiler->fp,
+				"%%%s.%jd =l alloc8 %jd\n",
+				name, local->values[2], local->values[3]
+			);
+	}
+	map_destroy(&compiler->locals);
+	pop_scope();
+
+	if (!push_scope())
+		return RESULT_FAIL;
+
+	/* redeclare parameters */
+	i = 0;
+	param_node = node->first;
+	for (; i < node->values[0]; i++, param_node = param_node->next) {
+
+		name_token = param_node->tokens[0];
+		struct map *local = slot_local(name_token->value);
+
+		local->values[0] = 1;
+		local->values[1] = (uintptr_t)param_results[i].type;
+		local->values[2] = local_map_count-1;
+	}
+
+	/* actually compile body */
+	compiler->no_block_push_scope = true;
+	if (!RESULT_OKAY(compiler_visit(compiler, body_node)))
+		return RESULT_FAIL;
+
+	map_destroy(&compiler->locals);
 	fputs("@return\nret 0\n}\n", compiler->fp);
 
 	pop_scope();
@@ -2485,7 +2558,7 @@ static struct result compiler_visit_variable(
 			return RESULT_FAIL;
 		}
 		global->values[0] = 1;
-		fprintf(
+		safe_fprintf(
 			compiler->fp,
 			"export data $%s = { ",
 			name_token->value
@@ -2503,7 +2576,7 @@ static struct result compiler_visit_variable(
 
 			/* string */
 			if (value_node->type == NODE_TYPE_STRING)
-				fprintf(
+				safe_fprintf(
 					compiler->fp,
 					"l $.str%d",
 					(int)value_result.data
@@ -2519,7 +2592,7 @@ static struct result compiler_visit_variable(
 					);
 					return RESULT_FAIL;
 				}
-				fprintf(
+				safe_fprintf(
 					compiler->fp,
 					"%c %zu",
 					get_qbe_type_raw(value_result.type),
@@ -2529,7 +2602,7 @@ static struct result compiler_visit_variable(
 		}
 		else {
 			size_t size = result_get_type_size(&type_result);
-			fprintf(
+			safe_fprintf(
 				compiler->fp,
 				"z %zu", size
 			);
@@ -2569,13 +2642,15 @@ static struct result compiler_visit_variable(
 				);
 				return RESULT_FAIL;
 			}
-			fprintf(
+			struct map *local_info = map_new_hash(&compiler->locals, 0);
+
+			local_info->values[0] = (uintptr_t)name_token->value;
+			local_info->values[2] = local_map_count-1;
+			local_info->values[3] = (uintptr_t)size;
+
+			safe_fprintf(
 				compiler->fp,
-				"%%%s.%d =l alloc8 %zu\n"
 				"%s %%.t%d, %%%s.%d\n",
-				name_token->value,
-				(int)local->values[2],
-				size,
 				get_qbe_type_store(type_result.type),
 				(int)value_result.iota,
 				name_token->value,
@@ -2587,15 +2662,17 @@ static struct result compiler_visit_variable(
 		else {
 			if (type_result.type <= TYPE_F64) {
 
+				struct map *local_info = map_new_hash(&compiler->locals, 0);
+
+				local_info->values[0] = (uintptr_t)name_token->value;
+				local_info->values[2] = local_map_count-1;
+				local_info->values[3] = (uintptr_t)size;
+
 				uint16_t iota = compiler->iota++;
-				fprintf(
+				safe_fprintf(
 					compiler->fp,
-					"%%%s.%d =l alloc8 %zu\n"
 					"%%.t%d =%c copy 0\n"
 					"%s %%.t%d, %%%s.%d\n",
-					name_token->value,
-					(int)local->values[2],
-					size,
 					(int)iota,
 					get_qbe_type(type_result.type),
 					get_qbe_type_store(type_result.type),
@@ -2604,26 +2681,27 @@ static struct result compiler_visit_variable(
 					(int)local->values[2]
 				);
 			}
-			else
-				fprintf(
+			else {
+				struct map *local_info = map_new_hash(&compiler->locals, 0);
+
+				local_info->values[0] = (uintptr_t)name_token->value;
+				local_info->values[1] = 1;
+				local_info->values[2] = local_map_count-1;
+				local_info->values[3] = (uintptr_t)size;
+
+				safe_fprintf(
 					compiler->fp,
-					"%%%s.%d.data =l alloc8 %zu\n"
 					"call $memset(l %%%s.%d.data, w 0, l %zu)\n"
-					"%%%s.%d =l alloc8 8\n"
 					"storel %%%s.%d.data, %%%s.%d\n",
 					name_token->value,
 					(int)local->values[2],
 					size,
 					name_token->value,
 					(int)local->values[2],
-					size,
-					name_token->value,
-					(int)local->values[2],
-					name_token->value,
-					(int)local->values[2],
 					name_token->value,
 					(int)local->values[2]
 				);
+			}
 		}
 	}
 	return RESULT(TYPE_I8, 0);
@@ -2656,7 +2734,7 @@ static struct result compiler_visit_if(
 	uint16_t b2_iota = compiler->iota++; /* else */
 	uint16_t b3_iota = compiler->iota++; /* end */
 
-	fprintf(
+	safe_fprintf(
 		compiler->fp,
 		"@branch.%d\n"
 		"jnz %%.t%d, @branch.%d.2, @branch.%d\n"
@@ -2672,7 +2750,7 @@ static struct result compiler_visit_if(
 	if (!RESULT_OKAY(body_result))
 		return RESULT_FAIL;
 
-	fprintf(
+	safe_fprintf(
 		compiler->fp,
 		"@branch.%d.3\n"
 		"jmp @branch.%d\n"
@@ -2688,7 +2766,7 @@ static struct result compiler_visit_if(
 		if (!RESULT_OKAY(else_result))
 			return RESULT_FAIL;
 	}
-	fprintf(
+	safe_fprintf(
 		compiler->fp,
 		"@branch.%d\n",
 		(int)b3_iota
@@ -2734,7 +2812,7 @@ static struct result compiler_visit_for(
 		return RESULT_FAIL;
 
 	/* initializer */
-	fprintf(
+	safe_fprintf(
 		compiler->fp,
 		"@branch.%d\n",
 		(int)init_iota
@@ -2746,7 +2824,7 @@ static struct result compiler_visit_for(
 		if (!RESULT_OKAY(initializer_result))
 			return RESULT_FAIL;
 	}
-	fprintf(
+	safe_fprintf(
 		compiler->fp,
 		"@branch.%d.2\n"
 		"jmp @branch.%d\n"
@@ -2764,7 +2842,7 @@ static struct result compiler_visit_for(
 		if (!RESULT_OKAY(increment_result))
 			return RESULT_FAIL;
 	}
-	fprintf(
+	safe_fprintf(
 		compiler->fp,
 		"@branch.%d\n",
 		(int)post_inc_iota
@@ -2786,7 +2864,7 @@ static struct result compiler_visit_for(
 			);
 			return RESULT_FAIL;
 		}
-		fprintf(
+		safe_fprintf(
 			compiler->fp,
 			"jnz %%.t%d, @branch.%d, @branch.%d\n",
 			(int)condition_result.iota,
@@ -2794,7 +2872,7 @@ static struct result compiler_visit_for(
 			(int)end_iota
 		);
 	}
-	fprintf(
+	safe_fprintf(
 		compiler->fp,
 		"@branch.%d\n",
 		(int)body_iota
@@ -2818,7 +2896,7 @@ static struct result compiler_visit_for(
 	compiler->loop_start_iota = old_start_iota;
 	compiler->loop_end_iota = old_end_iota;
 
-	fprintf(
+	safe_fprintf(
 		compiler->fp,
 		"@branch.%d\n"
 		"jmp @branch.%d\n"
@@ -2844,7 +2922,7 @@ static struct result compiler_visit_continue(
 		return RESULT_FAIL;
 	}
 	uint16_t iota = compiler->iota++;
-	fprintf(
+	safe_fprintf(
 		compiler->fp,
 		"@branch.%d\n"
 		"jmp @branch.%d\n"
@@ -2870,7 +2948,7 @@ static struct result compiler_visit_break(
 		return RESULT_FAIL;
 	}
 	uint16_t iota = compiler->iota++;
-	fprintf(
+	safe_fprintf(
 		compiler->fp,
 		"@branch.%d\n"
 		"jmp @branch.%d\n"
@@ -2900,7 +2978,7 @@ static struct result compiler_visit_return(
 		);
 		return RESULT_FAIL;
 	}
-	fprintf(
+	safe_fprintf(
 		compiler->fp,
 		"@return%d\n"
 		"ret %%.t%d\n"
@@ -2958,7 +3036,7 @@ static struct result compiler_visit_binop(
 				.flags = 0,
 				.iota = right_result.iota,
 			};
-			fprintf(
+			safe_fprintf(
 				compiler->fp,
 				"%s %%.t%d, %%%s.%d\n",
 				get_qbe_type_store(local->values[1]),
@@ -2984,7 +3062,7 @@ static struct result compiler_visit_binop(
 				.flags = 0,
 				.iota = right_result.iota,
 			};
-			fprintf(
+			safe_fprintf(
 				compiler->fp,
 				"%s %%.t%d, $%s\n",
 				get_qbe_type_store(result.type),
@@ -3039,7 +3117,7 @@ static struct result compiler_visit_binop(
 				.flags = 0,
 				.iota = right_result.iota,
 			};
-			fprintf(
+			safe_fprintf(
 				compiler->fp,
 				"%s %%.t%d, %%.t%d\n",
 				get_qbe_type_store(type_result.type),
@@ -3077,7 +3155,7 @@ static struct result compiler_visit_binop(
 			.flags = 0,
 			.iota = compiler->iota,
 		};
-		fprintf(
+		safe_fprintf(
 			compiler->fp,
 			"@branch.%d\n"
 			"jnz %%.t%d, @branch.%d.2, @branch.%d\n"
@@ -3093,7 +3171,7 @@ static struct result compiler_visit_binop(
 		if (!RESULT_OKAY(right_result))
 			return RESULT_FAIL;
 
-		fprintf(
+		safe_fprintf(
 			compiler->fp,
 			"@branch.%d\n"
 			"jnz %%.t%d, @branch.%d.2, @branch.%d\n"
@@ -3132,7 +3210,7 @@ static struct result compiler_visit_binop(
 			.flags = 0,
 			.iota = compiler->iota,
 		};
-		fprintf(
+		safe_fprintf(
 			compiler->fp,
 			"@branch.%d\n"
 			"jnz %%.t%d, @branch.%d.2, @branch.%d.2\n"
@@ -3148,7 +3226,7 @@ static struct result compiler_visit_binop(
 		if (!RESULT_OKAY(right_result))
 			return RESULT_FAIL;
 
-		fprintf(
+		safe_fprintf(
 			compiler->fp,
 			"@branch.%d\n"
 			"jnz %%.t%d, @branch.%d.2, @branch.%d\n"
@@ -3280,7 +3358,7 @@ static struct result compiler_visit_binop(
 
 	result.iota = compiler->iota++;
 
-	fprintf(
+	safe_fprintf(
 		compiler->fp,
 		"%%.t%d =%c %s %%.t%d, %%.t%d\n",
 		result.iota,
@@ -3328,7 +3406,7 @@ static struct result compiler_visit_unop(
 		result.type = TYPE_U8;
 		result.iota = compiler->iota++;
 
-		fprintf(
+		safe_fprintf(
 			compiler->fp,
 			"@branch.%d\n"
 			"jnz %%.t%d, @branch.%d, @branch.%d\n"
@@ -3362,7 +3440,7 @@ static struct result compiler_visit_unop(
 		}
 		result.iota = compiler->iota++;
 
-		fprintf(
+		safe_fprintf(
 			compiler->fp,
 			"%%.t%d =l xor %%.t%d, 18446744073709551615\n",
 			(int)result.iota, (int)value_result.iota
@@ -3374,7 +3452,7 @@ static struct result compiler_visit_unop(
 
 		result.iota = compiler->iota++;
 
-		fprintf(
+		safe_fprintf(
 			compiler->fp,
 			"%%.t%d =%c neg %%.t%d\n",
 			(int)result.iota,
@@ -3437,7 +3515,7 @@ static struct result compiler_visit_call(
 		.flags = 0,
 		.iota = compiler->iota++,
 	};
-	fprintf(
+	safe_fprintf(
 		compiler->fp,
 		"%%.t%d =%c call %%.t%d(",
 		(int)result.iota,
@@ -3450,7 +3528,7 @@ static struct result compiler_visit_call(
 	for (size_t i = 0; i < arg_count; i++, arg_node = arg_node->next) {
 
 		if (i) fputs(", ", compiler->fp);
-		fprintf(
+		safe_fprintf(
 			compiler->fp,
 			"%c %%.t%d",
 			get_qbe_type(arg_results[i].type),
@@ -3490,7 +3568,7 @@ static struct result compiler_visit_number(
 
 	result.iota = compiler->iota++;
 
-	fprintf(
+	safe_fprintf(
 		compiler->fp,
 		"%%.t%d =%c copy %ju\n",
 		(int)result.iota,
@@ -3539,7 +3617,7 @@ static struct result compiler_visit_string(
 
 	result.iota = compiler->iota++;
 
-	fprintf(
+	safe_fprintf(
 		compiler->fp,
 		"%%.t%d =l copy $.str%zu\n",
 		(int)result.iota, i
@@ -3562,7 +3640,7 @@ static struct result compiler_visit_global(
 
 	result.iota = compiler->iota++;
 
-	fprintf(
+	safe_fprintf(
 		compiler->fp,
 		"%%.t%d =l copy $%s\n",
 		result.iota,
@@ -3593,7 +3671,7 @@ static struct result compiler_visit_local(
 	};
 	result.iota = compiler->iota++;
 
-	fprintf(
+	safe_fprintf(
 		compiler->fp,
 		"%%.t%d =%c %s %%%s.%d\n",
 		result.iota,
@@ -3695,7 +3773,7 @@ static struct result compiler_visit_cast(
 		uint16_t iota = compiler->iota++;
 		result.iota = compiler->iota++;
 
-		fprintf(
+		safe_fprintf(
 			compiler->fp,
 			"%%.t%d =l and %%.t%d, %s\n"
 			"%%.t%d =%c %s %%.t%d\n",
@@ -3718,7 +3796,7 @@ static struct result compiler_visit_cast(
 	}
 	result.iota = compiler->iota++;
 
-	fprintf(
+	safe_fprintf(
 		compiler->fp,
 		"%%.t%d =%c %s %%.t%d\n",
 		(int)result.iota,
@@ -3767,7 +3845,7 @@ static struct result compiler_visit_member(
 
 	result.iota = compiler->iota++;
 
-	fprintf(
+	safe_fprintf(
 		compiler->fp,
 		"%%.t%d =l copy %zu\n",
 		(int)result.iota,
@@ -3810,7 +3888,7 @@ static struct result compiler_visit_dereference(
 		.flags = 0,
 		.iota = compiler->iota++,
 	};
-	fprintf(
+	safe_fprintf(
 		compiler->fp,
 		"%%.t%d =%c %s %%.t%d\n",
 		(int)result.iota,
@@ -3853,7 +3931,7 @@ static struct result compiler_visit_reference(
 		.flags = 0,
 		.iota = compiler->iota++,
 	};
-	fprintf(
+	safe_fprintf(
 		compiler->fp,
 		"%%.t%d =l copy %%%s.%d\n",
 		(int)result.iota,
@@ -3999,7 +4077,7 @@ static int run(int argc, const char **argv) {
 	struct map *string = string_map.next;
 	for (; string; string = string->next) {
 
-		fprintf(
+		safe_fprintf(
 			compiler.fp,
 			"data $.str%zu = { b \"",
 			(size_t)string->key_hash
@@ -4015,7 +4093,7 @@ static int run(int argc, const char **argv) {
 			else
 				fputc(data[i], compiler.fp);
 		}
-		fprintf(
+		safe_fprintf(
 			compiler.fp,
 			"\", b 0 }\n"
 		);
