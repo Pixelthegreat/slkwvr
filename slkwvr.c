@@ -20,6 +20,16 @@ static int safe_fprintf(FILE *fp, const char *fmt, ...) {
 
 	return count;
 }
+static int safe_fputc(int c, FILE *fp) {
+
+	if (!fp) return 0;
+	return fputc(c, fp);
+}
+static int safe_fputs(const char *s, FILE *fp) {
+
+	if (!fp) return 0;
+	return fputs(s, fp);
+}
 
 /* position information */
 struct position {
@@ -3535,7 +3545,7 @@ static struct result compiler_visit_call(
 			(int)arg_results[i].iota
 		);
 	}
-	fputs(")\n", compiler->fp);
+	safe_fputs(")\n", compiler->fp);
 
 	return result;
 }
@@ -4086,12 +4096,12 @@ static int run(int argc, const char **argv) {
 		for (size_t i = 0; data[i]; i++) {
 
 			if (data[i] == '\\' || data[i] == '"')
-				fputc('\\', compiler.fp);
+				safe_fputc('\\', compiler.fp);
 
 			if (data[i] == '\n')
-				fputs("\\n", compiler.fp);
+				safe_fputs("\\n", compiler.fp);
 			else
-				fputc(data[i], compiler.fp);
+				safe_fputc(data[i], compiler.fp);
 		}
 		safe_fprintf(
 			compiler.fp,
